@@ -1,0 +1,13 @@
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  username TEXT UNIQUE NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS exercises (
+  id TEXT PRIMARY KEY,
+  userId TEXT NOT NULL,
+  description TEXT NOT NULL,
+  duration INTEGER NOT NULL,
+  date TEXT NOT NULL,
+  FOREIGN KEY (userId) REFERENCES users(id)
+);
