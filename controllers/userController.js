@@ -80,42 +80,52 @@ exports.getLogs = async (req, res) => {
     const user = await SQL.get(`SELECT username FROM users WHERE id = ?`, [userId]);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    let query = `SELECT description, duration, date FROM exercises WHERE userId = ?`;
-    const params = [userId];
+    // Wspólne warunki
+    const filterClauses = [];
+    const filterParams = [userId];
 
     if (from) {
       if (!isValidDateFormat(from)) {
         return res.status(400).json({ error: '"from" must be YYYY-MM-DD' });
       }
-      params.push(from);
-      query += ` AND date >= ?`;
+      filterClauses.push(`date >= ?`);
+      filterParams.push(from);
     }
 
     if (to) {
       if (!isValidDateFormat(to)) {
         return res.status(400).json({ error: '"to" must be YYYY-MM-DD' });
       }
-      params.push(to);
-      query += ` AND date <= ?`;
+      filterClauses.push(`date <= ?`);
+      filterParams.push(to);
     }
 
-    query += ` ORDER BY date ASC`;
+    const whereClause = filterClauses.length ? `AND ${filterClauses.join(' AND ')}` : '';
+
+    // Zapytanie count — bez LIMIT
+    const countQuery = `SELECT COUNT(*) as count FROM exercises WHERE userId = ? ${whereClause}`;
+    const countResult = await SQL.get(countQuery, filterParams);
+    const count = countResult.count;
+
+    // Zapytanie logs — z LIMIT
+    let logQuery = `SELECT description, duration, date FROM exercises WHERE userId = ? ${whereClause} ORDER BY date ASC`;
+    const logParams = [...filterParams];
 
     if (limit) {
       const limitInt = parseInt(limit);
       if (isNaN(limitInt) || limitInt <= 0) {
         return res.status(400).json({ error: 'Invalid "limit"' });
       }
-      query += ` LIMIT ?`;
-      params.push(limitInt);
+      logQuery += ` LIMIT ?`;
+      logParams.push(limitInt);
     }
 
-    const logs = await SQL.all(query, params);
+    const logs = await SQL.all(logQuery, logParams);
 
     res.json({
       _id: userId,
       username: user.username,
-      count: logs.length,
+      count,
       log: logs,
     });
   } catch (err) {
