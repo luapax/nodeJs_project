@@ -38,13 +38,14 @@ app.get('/', (req, res) => {
 
 // Initialize database tables
 const fs = require('fs');
+const { register } = require('module');
 const schemaSQL = fs.readFileSync(path.join(__dirname, 'mydb.sql'), 'utf8');
 
 SQL.exec(schemaSQL);
 
 // POST /api/users - Create new user
 app.post('/api/users', async (req, res) => {
-  const username = req.body.username;
+  const username = req.body.username.trim();
   if (!username) return res.status(400).json({ error: 'Username is required' });
 
   const id = uuidv4();
@@ -56,7 +57,7 @@ app.post('/api/users', async (req, res) => {
     if (err.message.includes('UNIQUE')) {
       res.status(400).json({ error: 'Username already exists' });
     } else {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: 'Something went wrong. Try a different username.' });
     }
   }
 });
@@ -70,18 +71,32 @@ app.get('/api/users', async (req, res) => {
 // POST /api/users/:_id/exercises - Add exercise
 app.post('/api/users/:_id/exercises', async (req, res) => {
   const userId = req.params._id;
-  const { description, duration, date } = req.body;
+  const { date } = req.body;
+  const duration = req.body.duration?.trim();
+  const description = req.body.description?.trim();
 
-  if (!description || !duration) {
-    return res.status(400).json({ error: 'Description and duration are required' });
+  const durationInt = parseInt(duration);
+  if (!description || isNaN(durationInt) || durationInt <= 0) {
+    return res.status(400).json({ error: 'Description is required' });
+  }
+
+  if (isNaN(durationInt) || durationInt <= 0) {
+    return res
+      .status(400)
+      .json({ error: 'Duration is required and it has to be a positive number' });
+  }
+
+  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'Date must be in YYYY-MM-DD format' });
   }
 
   const parsedDate = date ? new Date(date) : new Date();
+
   if (isNaN(parsedDate)) {
     return res.status(400).json({ error: 'Invalid date format' });
   }
 
-  const formattedDate = parsedDate.toDateString();
+  const formattedDate = parsedDate.toISOString().split('T')[0];
   const exerciseId = uuidv4();
 
   try {
@@ -90,18 +105,18 @@ app.post('/api/users/:_id/exercises', async (req, res) => {
 
     await SQL.run(
       `INSERT INTO exercises (id, userId, description, duration, date) VALUES (?, ?, ?, ?, ?)`,
-      [exerciseId, userId, description, parseInt(duration), formattedDate]
+      [exerciseId, userId, description, durationInt, formattedDate]
     );
 
     res.json({
       _id: userId,
       username: user.username,
       description,
-      duration: parseInt(duration),
+      duration: durationInt,
       date: formattedDate,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.json({ error: 'Failed to add exercise, please try again' });
   }
 });
 
@@ -110,36 +125,66 @@ app.get('/api/users/:_id/logs', async (req, res) => {
   const userId = req.params._id;
   const { from, to, limit } = req.query;
 
-  const user = await SQL.get(`SELECT username FROM users WHERE id = ?`, [userId]);
-  if (!user) return res.status(404).json({ error: 'User not found' });
-
-  let query = `SELECT description, duration, date FROM exercises WHERE userId = ?`;
-  const params = [userId];
-
-  if (from) {
-    query += ` AND date >= ?`;
-    params.push(new Date(from).toDateString());
-  }
-
-  if (to) {
-    query += ` AND date <= ?`;
-    params.push(new Date(to).toDateString());
-  }
-
-  query += ` ORDER BY date DESC`;
-
   try {
-    let log = await SQL.all(query, params);
-    if (limit) log = log.slice(0, parseInt(limit));
+    const user = await SQL.get(`SELECT username FROM users WHERE id = ?`, [userId]);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    let query = `SELECT description, duration, date FROM exercises WHERE userId = ?`;
+    const params = [userId];
+
+    // Date filtering
+    if (from) {
+      const fromDate = new Date(from);
+      if (isNaN(fromDate)) {
+        return res.status(400).json({ error: 'Invalid "from" date format' });
+      }
+      query += ` AND date >= ?`;
+      params.push(fromDate.toISOString().split('T')[0]);
+    }
+
+    if (to) {
+      const toDate = new Date(to);
+      if (isNaN(toDate)) {
+        return res.status(400).json({ error: 'Invalid "to" date format' });
+      }
+      query += ` AND date <= ?`;
+      params.push(toDate.toISOString().split('T')[0]);
+    }
+
+    query += ` ORDER BY date ASC`;
+
+    if (limit) {
+      const limitInt = parseInt(limit);
+      if (isNaN(limitInt) || limitInt <= 0) {
+        return res.status(400).json({ error: 'Invalid "limit" value' });
+      }
+      query += ` LIMIT ?`;
+      params.push(limitInt);
+    }
+
+    const logs = await SQL.all(query, params);
+
+    let countQuery = `SELECT COUNT(*) as count FROM exercises WHERE userId = ?`;
+    const countParams = [userId];
+
+    if (from)
+      (countQuery += ` AND date >= ?`),
+        countParams.push(new Date(from).toISOString().split('T')[0]);
+    if (to)
+      (countQuery += ` AND date <= ?`), countParams.push(new Date(to).toISOString().split('T')[0]);
+
+    const countResult = await SQL.get(countQuery, countParams);
+    const count = countResult.count;
 
     res.json({
       username: user.username,
-      count: log.length,
+      count,
       _id: userId,
-      log,
+      log: logs,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Error fetching logs:', err);
+    res.status(500).json({ error: 'Failed to fetch logs' });
   }
 });
 
